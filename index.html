@@ -171,6 +171,22 @@
   #btnMute{background:rgba(10,23,52,.85);color:var(--ice);border:2px solid var(--line);border-radius:999px;
     padding:6px 14px;font-family:inherit;font-weight:800;font-size:13px;cursor:pointer;}
   #btnMute:active{transform:scale(.95);}
+  /* START button — DS-emulator style pill: tap it (or press P) to pause
+     a live battle; tap again to resume. Sits with the A / B / C face-button
+     controls in the actions column, directly under the DS cluster plate,
+     like the START pill on a handheld — same side as the thumb buttons. */
+  #btnStart{background:linear-gradient(180deg,#22355f,#101f42);color:var(--gold);border:2px solid var(--gold);
+    border-radius:999px;padding:8px 22px;font-family:inherit;font-weight:900;font-size:13px;letter-spacing:1.5px;
+    cursor:pointer;box-shadow:0 3px 0 #6b5200,0 0 10px rgba(255,210,62,.25);touch-action:manipulation;align-self:center;}
+  #btnStart:active{transform:translateY(2px);box-shadow:0 1px 0 #6b5200;}
+  #btnStart.paused{background:linear-gradient(180deg,#ffd23e,#e0a800);color:#241a00;animation:blink .5s infinite alternate;}
+  /* PAUSED overlay — covers the stage while the battle is frozen */
+  #pauseOverlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+    flex-direction:column;background:rgba(2,6,18,.82);border-radius:12px;text-align:center;padding:16px;z-index:7;}
+  #pauseOverlay.show{display:flex;}
+  #pauseOverlay h2{margin:0 0 4px;font-size:clamp(26px,5.5vw,44px);letter-spacing:6px;color:var(--gold);
+    text-shadow:0 0 18px rgba(255,210,62,.45);}
+  #pauseOverlay p{margin:4px 0;color:var(--ice);font-size:clamp(13px,2.4vw,16px);}
   #chipQueue{font-size:12px;color:var(--ice);text-align:center;min-height:16px;}
   #hint{font-size:12.5px;color:var(--dim);text-align:center;max-width:1240px;line-height:1.5;padding:0 8px 14px;}
   kbd{background:#12234d;border:1px solid var(--line);border-bottom-width:3px;border-radius:5px;padding:0 5px;font-size:11px;color:var(--ice);}
@@ -239,6 +255,7 @@
     #dsCluster .snowFuse{width:48px;height:48px;}
     #dsCluster .snowFuse img{width:22px;height:22px;}
     .dsLetter{font-size:19px;} .dsSub{font-size:6.5px;max-width:42px;}
+    #btnStart{padding:4px 14px;font-size:11px;}
     #hint{display:none;}
     #bannerLogo{width:76px;height:76px;margin-bottom:6px;}
     #banner p{max-height:26%;}
@@ -397,6 +414,11 @@
       </div>
       <button class="bigBtn" id="bannerBtn">JACK IN!</button>
     </div>
+    <div id="pauseOverlay" role="dialog" aria-label="Game paused">
+      <h2>❚❚ PAUSED</h2>
+      <p>Battle frozen.</p>
+      <button class="bigBtn" id="btnResume" type="button">▶ RESUME</button>
+    </div>
   </div>
 
   <div id="controls">
@@ -410,6 +432,7 @@
         <button class="dsBtn" id="btnCustom" type="button" aria-label="A button — Custom gauge screen"><span class="dsLetter">A</span><span class="dsSub">CUSTOM</span></button>
         <button class="dsBtn" id="btnBuster" type="button" aria-label="B button — Buster, hold to charge"><span class="dsLetter">B</span><span class="dsSub" id="busterSub">BUSTER</span></button>
       </div>
+      <button id="btnStart" type="button" aria-label="Start button — pause or resume the battle">❚❚ START</button>
       <div id="chipQueue">Chips loaded: none</div>
     </div>
   </div>
@@ -588,7 +611,7 @@ var game = {
   enemyTimer:0, enemyAtkTimer:2.4,
   shake:0, time:0, msg:'', msgT:0,
   panels:[], panelFxTimer:3.5, slipFx:0,
-  keys:{}
+  keys:{}, paused:false /* START button pause — freezes the whole battle */
 };
 /* ---- Panel effects, BOTH sides ----
    panels[r*COLS+c] = {state:'normal'|'cracked'|'broken'|'ice', t, max}
@@ -599,7 +622,12 @@ var game = {
    ICE rule: a grounded fighter who steps on / off ice slides one extra
    panel ("skips" a panel). Ice melts over time.
    LEVITATION EXCEPTION: levitating / flying Navis ignore both rules
-   entirely — they hover over cracked, broken and ice panels freely. */
+   entirely — they hover over cracked, broken and ice panels freely.
+   DARK EMBRACE LEVITATION: while the Embrace holds Outlets
+   (game.outrage), he levitates too — same exception, on his side:
+   broken panels don't block him, leaving a cracked panel doesn't
+   break it, and ice never slides him. The moment the Embrace ends
+   he is grounded again and every rule applies as normal. */
 function initPanels(){
   game.panels=[];
   for(var i=0;i<COLS*ROWS;i++) game.panels.push({state:'normal', t:0, max:0});
@@ -609,6 +637,9 @@ function panelAt(c,r){ if(c<0||c>=COLS||r<0||r>=ROWS) return null; return game.p
 function panelState(c,r){ var p=panelAt(c,r); return p? p.state:'normal'; }
 function isBroken(c,r){ return panelState(c,r)==='broken'; }
 function panelOccupied(c,r){ return (game.p.c===c&&game.p.r===r)||(game.e.c===c&&game.e.r===r); }
+/* Outlets levitates ONLY in Dark Embrace — while game.outrage is live he
+   hovers like a levitating Navi and the floor cannot touch him. */
+function playerLevitates(){ return !!game.outrage; }
 function breakCrackedPanel(c,r){
   var p=panelAt(c,r);
   if(!p || p.state!=='cracked') return;
@@ -747,6 +778,7 @@ function startStage(idx){
   }
   game.takeover=false; game.takeoverT=0; game.takeoverUsed=false; game.takeoverFx=null; game.breathFx=null;
   game.deleting=false; game.deleteFx=null; game.eDeleting=false;
+  setPaused(false); /* a new stage never starts paused — START state and its overlay reset with the fight */
   game.p.c=1; game.p.r=1; playerHome={c:1,r:1};
   game.boundary=3;
   game.shots=[]; game.eshots=[]; game.fx=[]; game.waves=[]; game.bombs=[]; game.queue=[]; game.dmgNums=[];
@@ -937,6 +969,40 @@ function renderQueueButtons(){ /* queue shown as tappable chips next to BUSTER f
 }
 document.getElementById('chipQueue').addEventListener('click',function(){ useNextChip(); });
 
+/* ============================== START BUTTON — PAUSE / RESUME ============================== */
+/* The START button (with the A / B / C controls, under the DS cluster) pauses a live battle: the
+   update loop freezes solid — boss, shots, panels, Custom gauge, Beast
+   Out / Dark Embrace / Navi Hack timers, everything — the soundtrack
+   holds its place (see the guard in scheduleBGM), and no damage can
+   land from a telegraphed attack that was already in flight. Tap
+   START again, tap RESUME, or press P / Esc to pick the fight back up
+   exactly where it stopped. */
+function syncPauseUI(){
+  var ov=document.getElementById('pauseOverlay');
+  if(ov) ov.classList.toggle('show', !!game.paused);
+  var sb=document.getElementById('btnStart');
+  if(sb){ sb.textContent= game.paused? '▶ START' : '❚❚ START'; sb.classList.toggle('paused', !!game.paused); }
+}
+function setPaused(v){
+  v=!!v;
+  if(game.paused===v){ syncPauseUI(); return; }
+  game.paused=v;
+  if(v){ /* freeze cleanly: a half-charged Buster is cancelled, never fired */
+    game.charging=false; game.charge=0;
+    var bb=document.getElementById('btnBuster');
+    if(bb) bb.classList.remove('on','charged');
+  }
+  syncPauseUI();
+  updateHUD();
+}
+function togglePause(){
+  if(game.mode!=='battle') return; /* START pauses a live battle only — banners, dialogue and the Custom Screen already hold the game */
+  setPaused(!game.paused);
+  sfx('chip');
+}
+document.getElementById('btnStart').addEventListener('click',function(ev){ ev.stopPropagation(); togglePause(); });
+document.getElementById('btnResume').addEventListener('click',function(ev){ ev.stopPropagation(); togglePause(); });
+
 /* ============================== CUSTOM SCREEN ============================== */
 var selIdx=-1, sack=[];
 var beastArmed=false; /* Gregar fusion armed on the Custom Screen, fires on OK */
@@ -998,9 +1064,11 @@ function activateBeast(){
 /* ============================== DARK EMBRACE — ICE DRAGON DARK FUSION ============================== */
 /* Triggered by using 3 Dark Chips in one battle. Costs 10% of max HP,
    lasts 30 seconds, and the game AUTO-PLAYS at maximum aggression:
-   the player has NO control until it subsides. Visually Outlets fuses
-   with an ice dragon — see the outrageFx cinematic in draw() and the
-   outrage form in drawOutlets(). */
+   the player has NO control until it subsides. While it lasts, Outlets
+   also LEVITATES (see playerLevitates()) — cracked, broken and ice
+   panels cannot affect him, exactly like a levitating Navi. Visually
+   Outlets fuses with an ice dragon — see the outrageFx cinematic in
+   draw() and the outrage form in drawOutlets(). */
 function triggerOutrage(){
   /* PHASE 1 — the fusion cinematic ONLY. Dark Embrace does NOT take over
      yet: Outlets stays fully under the player's control (move, buster,
@@ -1132,6 +1200,7 @@ function outrageAI(dt){ /* maximum aggression: hunt the enemy's row, spam breath
 }
 function openCustom(){
   if(typeof introDone!=='undefined' && !introDone) return; /* game intro still playing */
+  if(game.paused) return; /* START-paused: the Custom Screen stays shut until the battle resumes */
   if(game.mode!=='battle' && game.mode!=='banner') return;
   if(game.deleting){ return; }
   if(game.outrage){ setMsg('🐉 DARK EMBRACE has taken control — no Custom Screen!'); return; }
@@ -1215,6 +1284,7 @@ cv.addEventListener('touchend',function(e){ e.preventDefault(); if(game.mode==='
 
 /* ============================== COMBAT ============================== */
 function dmgEnemy(c,r,amt,src){
+  if(game.paused) return false; /* nothing takes damage while START-paused — not even a hit already in flight */
   if(game.beast && amt>0) amt=Math.max(1,Math.round(amt*1.3)); /* Gregar fusion boosts every attack */
   if(game.e.c===c && game.e.r===r && game.e.hp>0){
     game.e.hp-=amt; game.e.flash=0.18;
@@ -1228,6 +1298,7 @@ function dmgEnemy(c,r,amt,src){
   return false;
 }
 function dmgPlayer(amt){
+  if(game.paused) return; /* a telegraphed attack landing mid-pause fizzles instead of hitting a frozen player */
   if(game.time < game.p.invisUntil) return;
   if(game.time < game.p.guardUntil){ game.fx.push({x:panelCX(game.p.c),y:panelCY(game.p.r),t:0.25,kind:'guard'}); beep(300,0.06,'square',0.04); return; }
   game.p.hp-=amt; game.p.flash=0.2; game.p.invisUntil=game.time+0.8;
@@ -1337,7 +1408,7 @@ function chargeAttack(){
   var home={c:p.c,r:p.r};
   var tc=Math.max(game.boundary, e.c-1); /* panel directly in front of the enemy */
   var tr=e.r;
-  if(isBroken(tc,tr)){ /* don't materialise over a hole — shift to a solid row */
+  if(!playerLevitates() && isBroken(tc,tr)){ /* don't materialise over a hole — shift to a solid row (levitating Dark Embrace Outlets hovers over the hole happily) */
     var alt=[0,1,2].filter(function(rr){ return !isBroken(tc,rr); });
     if(alt.length) tr=alt[0];
   }
@@ -1398,6 +1469,7 @@ function purgeLockedDarkChips(){
 }
 function useNextChip(auto){
   if(game.mode!=='battle') return;
+  if(game.paused && !auto) return; /* C button is dead while START-paused */
   if(game.deleting) return;
   if(game.outrage && !auto){ setMsg('🐉 DARK EMBRACE is in control — Outlets fights on his own!'); return; }
   var purged=purgeLockedDarkChips();
@@ -1720,6 +1792,7 @@ function enemyAttack(){
 var moveCd=0;
 function tryMove(dir, auto){
   if(game.mode!=='battle') return;
+  if(game.paused) return; /* frozen — the analog stick and keys do nothing until START resumes */
   if(game.deleting) return; /* no moving a Navi who is being deleted */
   if(game.outrage && !auto) return; /* OUTRAGE: the dragon moves Outlets, not you */
   var p=game.p;
@@ -1728,14 +1801,17 @@ function tryMove(dir, auto){
   if(dir==='left') dc=-1; if(dir==='right') dc=1; if(dir==='up') dr=-1; if(dir==='down') dr=1;
   var nc=p.c+dc, nr=p.r+dr;
   if(nc<0||nc>=game.boundary||nr<0||nr>=ROWS) return;
-  if(isBroken(nc,nr)){ setMsg('That panel is broken — wait for it to repair!'); beep(160,0.07,'square',0.04); return; }
+  var lev = playerLevitates(); /* Dark Embrace: Outlets hovers — the floor cannot touch him */
+  if(!lev && isBroken(nc,nr)){ setMsg('That panel is broken — wait for it to repair!'); beep(160,0.07,'square',0.04); return; }
   var startC=p.c, startR=p.r;
-  var wasIce = panelState(p.c,p.r)==='ice';
+  var wasIce = !lev && panelState(p.c,p.r)==='ice';
   p.c=nc; p.r=nr;
-  /* Walking OFF a cracked panel breaks it — it stays broken until it heals */
-  vacatePanel(startC,startR);
-  /* Ice slide: standing on ice (or landing on it) carries you one panel further */
-  if(wasIce || panelState(p.c,p.r)==='ice'){
+  /* Walking OFF a cracked panel breaks it — it stays broken until it heals.
+     Levitating Outlets never steps off anything, so the crack stays put. */
+  if(!lev) vacatePanel(startC,startR);
+  /* Ice slide: standing on ice (or landing on it) carries you one panel
+     further — grounded fighters only; a hovering Navi never slips. */
+  if(wasIce || (!lev && panelState(p.c,p.r)==='ice')){
     var sc=p.c+dc, sr=p.r+dr;
     if(sc>=0&&sc<game.boundary&&sr>=0&&sr<ROWS&&!isBroken(sc,sr)){
       var midC=p.c, midR=p.r;
@@ -1816,10 +1892,11 @@ var analogDir=null;
   }
 })();
 var busterBtn=document.getElementById('btnBuster');
-function busterDown(e){ if(e) e.preventDefault(); if(game.mode!=='battle'||game.outrage||game.deleting) return; game.charging=true; busterBtn.classList.add('on'); }
+function busterDown(e){ if(e) e.preventDefault(); if(game.mode!=='battle'||game.paused||game.outrage||game.deleting) return; game.charging=true; busterBtn.classList.add('on'); }
 function busterUp(){
   if(!game.charging) return;
   game.charging=false; busterBtn.classList.remove('on','charged');
+  if(game.paused){ game.charge=0; return; } /* released during a pause: the shot is swallowed, not fired */
   if(game.mode!=='battle'){ game.charge=0; return; }
   if(game.charge>=1){ chargeAttack(); }
   else busterShot();
@@ -1833,6 +1910,8 @@ window.addEventListener('keydown',function(e){
   var k=e.key.toLowerCase();
   if(['arrowup','arrowdown','arrowleft','arrowright',' '].indexOf(k)>=0 || e.key.startsWith('Arrow')) e.preventDefault();
   if(game.mode==='custom'){ if(k==='escape') closeCustom(false); return; }
+  if(k==='p' && !e.repeat){ togglePause(); return; } /* P is the keyboard START button */
+  if(game.paused){ if(k==='escape') togglePause(); return; } /* frozen: only START / P / Esc get through */
   if(k==='arrowup'||k==='w') tryMove('up');
   if(k==='arrowdown'||k==='s') tryMove('down');
   if(k==='arrowleft'||k==='a') tryMove('left');
@@ -1851,6 +1930,7 @@ var lastT=0;
 function update(ts){
   requestAnimationFrame(update);
   var dt=Math.min(0.05,(ts-lastT)/1000||0.016); lastT=ts;
+  if(game.paused){ draw(); return; } /* START pause: the battle is frozen solid — frame stays up, nothing advances */
   if(game.mode==='battle'){
     game.time+=dt;
     if(game.gauge<game.gaugeMax){ game.gauge+=dt; if(game.gauge>=game.gaugeMax){ game.gauge=game.gaugeMax; sfx('charge');
@@ -2094,6 +2174,10 @@ function draw(){
   if(game.e.levitates && game.e.hp>0){ /* hover glow under levitating bosses */
     ctx.fillStyle='rgba(160,220,255,0.20)';
     ctx.beginPath(); ctx.ellipse(panelCX(game.e.c),panelCY(game.e.r)+40,30,7,0,0,7); ctx.fill();
+  }
+  if(playerLevitates() && game.p.hp>0){ /* same hover glow under Outlets while Dark Embrace levitates him */
+    ctx.fillStyle='rgba(160,190,255,0.22)';
+    ctx.beginPath(); ctx.ellipse(panelCX(game.p.c),panelCY(game.p.r)+40,30,7,0,0,7); ctx.fill();
   }
   if(game.takeover && game.e.hp>0){ /* the fused boss burns with Bass's dark aura — twin rings, violet and gold */
     var tkx=panelCX(game.e.c), tky=panelCY(game.e.r);
@@ -2916,7 +3000,7 @@ function drawOutlets(x,y,flash,chargeLvl){
   /* FUSED = BIGGER. The beast form is drawn ~38% larger with a heavier,
      faster prowl-bob — it should read as a different creature, not a
      recolor of the base sprite. */
-  var bob=Math.sin(game.time*(beastOn?6.5:4))*(beastOn?3:2);
+  var bob=Math.sin(game.time*(beastOn?6.5:4))*(beastOn?3:2) + (outOn? -7+Math.sin(game.time*2.1)*2 : 0); /* Dark Embrace LEVITATES — same hover lift the levitating bosses get */
   ctx.translate(0,bob);
   if(beastOn){ var bsc=1.38+Math.sin(game.time*3.2)*0.02; ctx.scale(bsc,bsc); }
   if(outOn){ var osc=1.33+Math.sin(game.time*3.6)*0.02; ctx.scale(osc,osc); }
@@ -3507,6 +3591,7 @@ function startBGM(){
 }
 function scheduleBGM(){
   if(!bgm.on || !AC) return;
+  if(game.paused){ bgm.nextT=AC.currentTime+0.06; return; } /* START pause holds the soundtrack in place — it resumes on the same step */
   if(AC.state==='suspended'){ AC.resume(); return; }
   var stepDur= bgm.mode==='boss'? 60/138/4 : 60/93/4; /* boss track: 138 BPM and relentless; normal groove: 16th notes at 93 BPM — a laid-back funk pocket, not a march */
   while(bgm.nextT < AC.currentTime+0.30){
